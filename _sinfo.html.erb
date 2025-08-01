@@ -1,0 +1,168 @@
+<!-- System Status widget: parses SLURM sinfo output and renders partition-level status -->
+<div class="widget-header">
+  <div class="widget-title">
+    <!-- Icon + title for the system status widget -->
+    <i class="fas fa-server"></i>
+    <span>System Status</span>
+  </div>
+  <!-- Manual refresh button -->
+  <button id="reloadStatus" class="widget-action" title="Refresh">
+    <i class="fa fa-rotate-right"></i>
+  </button>
+</div>
+
+<!-- Timestamp showing when status was last updated -->
+<div id="status-timestamp" class="last-updated"></div>
+
+<!-- Container with raw sinfo output; server-side injects this -->
+<div id="system-status-content">
+  <pre>
+    <%= `sinfo -o "%P %D %t %C %m %G %N" 2>/dev/null` %>
+  </pre>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  // Grab parent container and the <pre> element with raw sinfo output
+  const container = document.getElementById("system-status-content");
+  const preElement = container.querySelector("pre");
+
+  // If there's no pre element, nothing to do
+  if (!preElement) return;
+
+  // Read and trim the raw text; simple sanity check for presence of multiple lines
+  const rawText = preElement.innerText.trim();
+  if (!rawText || rawText.split("\n").length <= 1) {
+    // Show fallback message if output is missing or too short
+    container.innerHTML = `<div class="no-data-msg">Unable to retrieve system status. SLURM may be unreachable.</div>`;
+    return;
+  }
+
+  // Render the parsed structured status and update timestamp initially
+  renderStatus(preElement);
+  updateStatusTimestamp();
+
+  // Wire up the refresh button to re-fetch the whole page and re-parse
+  document.getElementById("reloadStatus")?.addEventListener("click", () => {
+    fetch(window.location.href, { cache: "no-store" })
+      .then(response => response.text())
+      .then(html => {
+        // Create temporary container to parse returned HTML
+        const temp = document.createElement("div");
+        temp.innerHTML = html;
+        const newPre = temp.querySelector("#system-status-content pre");
+        if (newPre) {
+          // Replace old content with refreshed raw output
+          container.innerHTML = "";
+          container.appendChild(newPre);
+          const refreshedRaw = newPre.innerText.trim();
+          if (!refreshedRaw || refreshedRaw.split("\n").length <= 1) {
+            // Fallback if refreshed output is invalid
+            container.innerHTML = `<div class="no-data-msg">Unable to retrieve system status. SLURM may be unreachable.</div>`;
+          } else {
+            // Re-render with new data and update timestamp
+            renderStatus(newPre);
+            updateStatusTimestamp();
+          }
+        }
+      });
+  });
+
+  // Parse raw sinfo output and transform into styled status sections
+  function renderStatus(preElement) {
+    const rawText = preElement.innerText.trim();
+    const lines = rawText.split("\n");
+    const headers = lines[0].split(/\s+/);
+
+    // Determine column indices for required fields
+    const partitionIdx = headers.indexOf("PARTITION");
+    const nodesIdx = headers.indexOf("NODES");
+    const stateIdx = headers.indexOf("STATE");
+
+    // Container for the new UI representation
+    const widget = document.createElement("div");
+    widget.className = "sinfo-container";
+
+    // Aggregation structures
+    const partitions = {};
+    // States considered "used" (allocating or active)
+    const usedStates = ["ALLOC", "ALLOCATED", "ALLOCATED+", "MIX", "MIXED", "COMPLETING", "DRAINING", "FAILING"];
+    // States considered offline or degraded
+    const offlineStates = ["DOWN", "DRAINED", "DRAINING", "FAIL", "FAILING", "INVAL", "MAINT", "POWERED_DOWN", "POWERING_DOWN", "UNKNOWN", "FUTURE"];
+
+    // Process each line (skip header)
+    lines.slice(1).forEach(line => {
+      const cols = line.trim().split(/\s+/);
+      const partition = cols[partitionIdx];
+      const nodes = parseInt(cols[nodesIdx]);
+      let stateRaw = cols[stateIdx];
+      let state = stateRaw.toUpperCase().replace(/[^A-Z]/g, "");
+
+      // Initialize partition bucket if not present
+      if (!partitions[partition]) {
+        let subtitle = "standard, wide";
+        // Derive human-friendly subtitle based on naming conventions
+        if (partition.startsWith("dept.")) subtitle = "department, condo";
+        else if (partition.startsWith("pi.")) subtitle = "pi, condo";
+        else if (partition.startsWith("grp.")) subtitle = "group, condo";
+        else if (["short", "medium", "long", "gpu", "bigmem", "test"].includes(partition)) subtitle = "public, shared";
+        else if (partition.startsWith("cenvalarc.")) subtitle = "cenval-arc, shared";
+
+        partitions[partition] = {
+          total: 0,
+          used: 0,
+          offline: 0,
+          subtitle: subtitle
+        };
+      }
+
+      // Aggregate counts
+      partitions[partition].total += nodes;
+      if (usedStates.includes(state)) partitions[partition].used += nodes;
+      if (offlineStates.includes(state)) partitions[partition].offline += nodes;
+    });
+
+    // Build UI blocks for each partition
+    for (const [partition, data] of Object.entries(partitions)) {
+      const used = data.used;
+      const total = data.total;
+      const available = total - used;
+      const percentUsed = total ? (used / total) * 100 : 0;
+
+      const section = document.createElement("div");
+      section.className = "sinfo-section";
+
+      // Construct inner HTML for partition status
+      section.innerHTML = `
+        <div class="sinfo-title">${partition}</div>
+        <div class="sinfo-subtitle">${data.subtitle}</div>
+        <div class="sinfo-status">
+          <div><strong>${used}</strong> / <strong>${total}</strong> nodes in use <span style="color: #666;">(${available} available)</span></div>
+          <div class="status-chip">Up</div>
+        </div>
+        <div class="sinfo-bar-wrapper">
+          <div class="sinfo-bar-fill ${percentUsed >= 90 ? 'red' : percentUsed >= 70 ? 'yellow' : 'green'}" style="width: ${percentUsed}%;"></div>
+        </div>
+        <div class="sinfo-status">
+          <div style="color: #888;">${Math.round(percentUsed)}% utilization</div>
+          <div class="offline"><strong>${data.offline}</strong> nodes offline</div>
+        </div>
+      `;
+
+      widget.appendChild(section);
+    }
+
+    // Replace raw <pre> output with structured widget
+    preElement.replaceWith(widget);
+  }
+
+  // Update the "Last updated:" timestamp element
+  function updateStatusTimestamp() {
+    const el = document.getElementById("status-timestamp");
+    if (el) {
+      const now = new Date();
+      el.textContent = `Last updated: ${now.toLocaleTimeString()}`;
+    }
+  }
+});
+</script>
