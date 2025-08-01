@@ -23,7 +23,7 @@ This widget displays current system status by parsing the output of `sinfo` (SLU
 Clone the repository:
 
 ```bash
-git clone https://github.com/your-username/ood_system_status_widget.git
+git clone [https://github.com/NessieCanCode/ood_sinfo_widget.git]
 cd ood_system_status_widget
 ```
 
