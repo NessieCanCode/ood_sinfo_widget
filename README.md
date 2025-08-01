@@ -5,6 +5,7 @@ Pulls raw `sinfo` output, summarizes per-partition usage, offline nodes, and sho
 
 ## About
 ![System Status Widget](Screenshot.gif)
+
 This widget displays current system status by parsing the output of `sinfo` (SLURM) and rendering a compact, human-friendly overview of each partition: total vs used nodes, offline nodes, and percent utilization, with classification coloring. It is intended to be dropped into existing OnDemand-style dashboards with minimal changes so other sites/institutions can adopt the same status surface.
 
 ## Features
